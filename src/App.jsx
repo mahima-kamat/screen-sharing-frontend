@@ -35,7 +35,7 @@ export default function App() {
     {
       urls: "turn:openrelay.metered.ca:80",
       username: "openrelayproject",
-      credential: "openrelayproject",
+      credential: "openrelay",
     },
   ],
 });
