@@ -55,15 +55,22 @@ export default function App() {
     }
   };
 
-  peerConnection.current.ontrack = (event) => {
-    console.log("Remote track received");
+peerConnection.current.ontrack = async (event) => {
+  console.log("Remote track received");
 
-    const [stream] = event.streams;
+  const [stream] = event.streams;
 
-    if (remoteVideoRef.current) {
-      remoteVideoRef.current.srcObject = stream;
+  if (stream && remoteVideoRef.current) {
+    remoteVideoRef.current.srcObject = stream;
+
+    try {
+      await remoteVideoRef.current.play();
+      console.log("Remote video playing");
+    } catch (err) {
+      console.log("Play error:", err);
     }
-  };
+  }
+};
 
   peerConnection.current.onconnectionstatechange = () => {
     console.log(
@@ -247,11 +254,18 @@ export default function App() {
         <div>
           <h3>Received Screen</h3>
           <video
-            ref={remoteVideoRef}
-            autoPlay
-            playsInline
-            style={{ width: "400px", height: "300px", border: "2px solid black", backgroundColor: "#222" }}
-          />
+  ref={remoteVideoRef}
+  autoPlay
+  playsInline
+  controls
+  muted={false}
+  style={{
+    width: "400px",
+    height: "300px",
+    border: "2px solid black",
+    background: "black",
+  }}
+/>
         </div>
       </div>
     </div>
