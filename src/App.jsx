@@ -72,14 +72,14 @@ peerConnection.current.ontrack = async (event) => {
   if (remoteVideoRef.current) {
     remoteVideoRef.current.srcObject = stream;
 
-    setTimeout(async () => {
+    remoteVideoRef.current.onloadedmetadata = async () => {
       try {
         await remoteVideoRef.current.play();
-        console.log("VIDEO PLAYING");
+        console.log("VIDEO PLAYING SUCCESSFULLY");
       } catch (err) {
-        console.log("PLAY ERROR:", err);
+        console.log("VIDEO PLAY ERROR:", err);
       }
-    }, 1000);
+    };
   }
 };
 
@@ -268,7 +268,6 @@ peerConnection.current.ontrack = async (event) => {
   ref={remoteVideoRef}
   autoPlay
   playsInline
-  controls
   muted
   style={{
     width: "400px",
