@@ -31,13 +31,20 @@ export default function App() {
   }, []);
 
   const initPeerConnection = (socket) => {
- peerConnection.current = new RTCPeerConnection({
+peerConnection.current = new RTCPeerConnection({
+  iceTransportPolicy: "relay",
+
   iceServers: [
     {
       urls: "stun:global.stun.twilio.com:3478",
     },
     {
-      urls: "turn:global.relay.metered.ca:80",
+      urls: [
+        "turn:global.relay.metered.ca:80",
+        "turn:global.relay.metered.ca:80?transport=tcp",
+        "turn:global.relay.metered.ca:443",
+        "turns:global.relay.metered.ca:443?transport=tcp",
+      ],
       username: "YOUR_USERNAME",
       credential: "YOUR_PASSWORD",
     },
