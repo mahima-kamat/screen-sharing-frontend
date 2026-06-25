@@ -191,6 +191,7 @@ export default function App() {
           <video
             ref={remoteVideoRef}
             autoPlay
+            muted
             playsInline
             style={{ width: "400px", height: "300px", border: "2px solid black" }}
           />
