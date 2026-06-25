@@ -61,8 +61,7 @@ peerConnection.current = new RTCPeerConnection({
       });
     }
   };
-
-peerConnection.current.ontrack = (event) => {
+peerConnection.current.ontrack = async (event) => {
   console.log("Remote track received");
 
   const [stream] = event.streams;
@@ -72,18 +71,17 @@ peerConnection.current.ontrack = (event) => {
   if (remoteVideoRef.current) {
     remoteVideoRef.current.srcObject = stream;
 
-    setTimeout(() => {
-      remoteVideoRef.current
-        .play()
-        .then(() => {
-          console.log("VIDEO PLAYING");
-        })
-        .catch((err) => {
-          console.log("PLAY ERROR:", err);
-        });
-    }, 500);
+    remoteVideoRef.current.load();
+
+    try {
+      await remoteVideoRef.current.play();
+      console.log("VIDEO PLAYING");
+    } catch (err) {
+      console.log("PLAY ERROR:", err);
+    }
   }
 };
+
 
   peerConnection.current.onconnectionstatechange = () => {
     console.log(
@@ -269,13 +267,14 @@ peerConnection.current.ontrack = (event) => {
           <video
   ref={remoteVideoRef}
   autoPlay
-  playsInline
   muted
+  playsInline
+  controls
   style={{
-    width: "400px",
-    height: "300px",
-    backgroundColor: "black",
-    border: "2px solid black",
+    width: "600px",
+    height: "400px",
+    background: "black",
+    border: "3px solid red",
   }}
 />
         </div>
