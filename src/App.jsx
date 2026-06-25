@@ -31,42 +31,62 @@ export default function App() {
   }, []);
 
   const initPeerConnection = (socket) => {
-    peerConnection.current = new RTCPeerConnection({
-  iceServers: [
-    {
-      urls: [
-        "stun:stun.l.google.com:19302",
-        "stun:stun1.l.google.com:19302",
-      ],
-    },
-    {
-      urls: [
-        "turn:openrelay.metered.ca:80",
-        "turn:openrelay.metered.ca:443",
-        "turn:openrelay.metered.ca:443?transport=tcp",
-      ],
-      username: "openrelayproject",
-      credential: "openrelayproject",
-    },
-  ],
-});
+  peerConnection.current = new RTCPeerConnection({
+    iceServers: [
+      {
+        urls: [
+          "stun:stun.l.google.com:19302",
+          "stun:stun1.l.google.com:19302",
+        ],
+      },
+      {
+        urls: [
+          "turn:openrelay.metered.ca:80",
+          "turn:openrelay.metered.ca:443",
+          "turn:openrelay.metered.ca:443?transport=tcp",
+        ],
+        username: "openrelayproject",
+        credential: "openrelayproject",
+      },
+    ],
+  });
 
-    peerConnection.current.onicecandidate = (event) => {
-      if (event.candidate && socket) {
-        socket.emit("ice-candidate", {
-          roomId: roomIdRef.current,
-          candidate: event.candidate,
-        });
-      }
-    };
+  peerConnection.current.onicecandidate = (event) => {
+    if (event.candidate) {
+      console.log("Sending ICE candidate");
 
-    peerConnection.current.ontrack = (event) => {
-      const [stream] = event.streams;
-      if (stream && remoteVideoRef.current) {
-        remoteVideoRef.current.srcObject = stream;
-      }
-    };
+      socket.emit("ice-candidate", {
+        roomId: roomIdRef.current,
+        candidate: event.candidate,
+      });
+    }
   };
+
+  peerConnection.current.ontrack = (event) => {
+    console.log("Remote track received");
+
+    const [stream] = event.streams;
+
+    if (remoteVideoRef.current) {
+      remoteVideoRef.current.srcObject = stream;
+    }
+  };
+
+  peerConnection.current.onconnectionstatechange = () => {
+    console.log(
+      "Connection State:",
+      peerConnection.current.connectionState
+    );
+  };
+
+  peerConnection.current.oniceconnectionstatechange = () => {
+    console.log(
+      "ICE State:",
+      peerConnection.current.iceConnectionState
+    );
+  };
+};
+    
 
   const joinRoom = () => {
     if (!roomId) return alert("Please enter a Room ID");
