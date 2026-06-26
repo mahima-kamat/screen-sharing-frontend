@@ -2,200 +2,192 @@ import React, { useEffect, useRef, useState } from "react";
 import io from "socket.io-client";
 
 export default function App() {
-  const [roomId, setRoomId] = useState("");
-  const [isJoined, setIsJoined] = useState(false);
+  const [peerId, setPeerId] = useState("");
+  const [connected, setConnected] = useState(false);
+
+  const socketRef = useRef(null);
+  const pcRef = useRef(null);
+  const localStreamRef = useRef(null);
 
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
 
-  const socketRef = useRef(null);
-  const peerConnection = useRef(null);
-  const localStream = useRef(null);
-  const isNegotiating = useRef(false);
-  const iceCandidatesQueue = useRef([]);
+  // unique user id per device/tab
+  const userIdRef = useRef(
+    localStorage.getItem("userId") ||
+      (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()))
+  );
 
-  // Ref keeps the latest roomId accessible to useEffect event listeners
-  const roomIdRef = useRef(roomId);
-  useEffect(() => {
-    roomIdRef.current = roomId;
-  }, [roomId]);
+  localStorage.setItem("userId", userIdRef.current);
 
-  // Clean up on component unmount
-  useEffect(() => {
-    return () => {
-      if (peerConnection.current) peerConnection.current.close();
-      if (socketRef.current) socketRef.current.disconnect();
-    };
-  }, []);
+  // =========================
+  // CONNECT SOCKET
+  // =========================
+  const connect = () => {
+    const socket = io("https://screensharebackend-6fat.onrender.com");
 
-  const initPeerConnection = (socket) => {
-    peerConnection.current = new RTCPeerConnection({
-  iceServers: [
-    { urls: "stun:stun.l.google.com:19302" },
-    {
-      urls: ["turn:openrelay.metered.ca:80",
-       "turn:openrelay.metered.ca:443",
-        "turn:openrelay.metered.ca:443?transport=tcp",],
-      username: "openrelayproject",
-      credential: "openrelayproject",
-    },
-  ],
-});
+    socketRef.current = socket;
 
-    // Send local ICE candidates to the remote peer
-    peerConnection.current.onicecandidate = (event) => {
-      if (event.candidate && socket) {
-        socket.emit("ice-candidate", {
-          roomId: roomIdRef.current,
+    socket.on("connect", () => {
+      console.log("Connected:", socket.id);
+
+      // register user
+      socket.emit("register", userIdRef.current);
+      setConnected(true);
+
+      initPeer();
+    });
+
+    // =========================
+    // OFFER RECEIVED
+    // =========================
+    socket.on("offer", async ({ from, offer }) => {
+      console.log("Offer from:", from);
+
+      await pcRef.current.setRemoteDescription(offer);
+
+      const answer = await pcRef.current.createAnswer();
+      await pcRef.current.setLocalDescription(answer);
+
+      socket.emit("answer", {
+        to: from,
+        from: userIdRef.current,
+        answer,
+      });
+    });
+
+    // =========================
+    // ANSWER RECEIVED
+    // =========================
+    socket.on("answer", async ({ answer }) => {
+      console.log("Answer received");
+      await pcRef.current.setRemoteDescription(answer);
+    });
+
+    // =========================
+    // ICE CANDIDATES
+    // =========================
+    socket.on("ice-candidate", async ({ candidate }) => {
+      try {
+        if (candidate) {
+          await pcRef.current.addIceCandidate(candidate);
+        }
+      } catch (err) {
+        console.log("ICE error:", err);
+      }
+    });
+  };
+
+  // =========================
+  // PEER CONNECTION
+  // =========================
+  const initPeer = () => {
+    pcRef.current = new RTCPeerConnection({
+      iceServers: [
+        { urls: "stun:stun.l.google.com:19302" }
+      ],
+    });
+
+    // send ICE to remote peer
+    pcRef.current.onicecandidate = (event) => {
+      if (event.candidate && socketRef.current) {
+        socketRef.current.emit("ice-candidate", {
+          to: peerId,
+          from: userIdRef.current,
           candidate: event.candidate,
         });
       }
     };
 
-    // Listen for incoming remote stream tracks
-    peerConnection.current.ontrack = (event) => {
-      const [stream] = event.streams;
-      if (stream && remoteVideoRef.current) {
-        remoteVideoRef.current.srcObject = stream;
+    // receive remote stream
+    pcRef.current.ontrack = (event) => {
+      if (remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = event.streams[0];
       }
     };
   };
 
-  const joinRoom = () => {
-    if (!roomId) return alert("Please enter a Room ID");
-
-    const socket = io("https://screensharebackend-6fat.onrender.com");
-    socketRef.current = socket;
-
-    socket.on("connect", () => {
-      socket.emit("join-room", roomId);
-      setIsJoined(true);
-      initPeerConnection(socket);
-    });
-
-    socket.on("connect_error", () => {
-      alert("Failed to connect to signaling server");
-    });
-
-    // Offer Handler (Receiver side)
-    socket.on("offer", async (offer) => {
-      if (isNegotiating.current) return;
-      isNegotiating.current = true;
-      try {
-        if (peerConnection.current.signalingState !== "stable") return;
-        await peerConnection.current.setRemoteDescription(new RTCSessionDescription(offer));
-        const answer = await peerConnection.current.createAnswer();
-        await peerConnection.current.setLocalDescription(answer);
-
-        socket.emit("answer", { roomId: roomIdRef.current, answer });
-
-        // Add early ICE candidates
-        for (const candidate of iceCandidatesQueue.current) {
-          await peerConnection.current.addIceCandidate(new RTCIceCandidate(candidate));
-        }
-        iceCandidatesQueue.current = [];
-      } catch (err) {
-        console.error("Offer error:", err);
-      } finally {
-        isNegotiating.current = false;
-      }
-    });
-
-    // Answer Handler (Sender side)
-    socket.on("answer", async (answer) => {
-      try {
-        if (peerConnection.current.signalingState === "have-local-offer") {
-          await peerConnection.current.setRemoteDescription(new RTCSessionDescription(answer));
-
-          // Add early ICE candidates
-          for (const candidate of iceCandidatesQueue.current) {
-            await peerConnection.current.addIceCandidate(new RTCIceCandidate(candidate));
-          }
-          iceCandidatesQueue.current = [];
-        }
-      } catch (err) {
-        console.error("Answer error:", err);
-      }
-    });
-
-    // ICE Candidate Handler
-    socket.on("ice-candidate", async (candidate) => {
-      try {
-        if (peerConnection.current && peerConnection.current.remoteDescription) {
-          await peerConnection.current.addIceCandidate(new RTCIceCandidate(candidate));
-        } else {
-          iceCandidatesQueue.current.push(candidate);
-        }
-      } catch (err) {
-        console.error("ICE error:", err);
-      }
-    });
-  };
-
+  // =========================
+  // SHARE SCREEN
+  // =========================
   const shareScreen = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: true,
-        audio: false,
-      });
-      localStream.current = stream;
-      if (localVideoRef.current) {
-        localVideoRef.current.srcObject = stream;
-      }
-
-      stream.getTracks().forEach((track) => {
-        peerConnection.current.addTrack(track, stream);
-      });
-
-      const offer = await peerConnection.current.createOffer();
-      await peerConnection.current.setLocalDescription(offer);
-
-      socketRef.current.emit("offer", { roomId, offer });
-    } catch (err) {
-      console.error("Screen share error:", err);
+    if (!peerId) {
+      alert("Enter peer ID first");
+      return;
     }
+
+    const stream = await navigator.mediaDevices.getDisplayMedia({
+      video: true,
+      audio: false,
+    });
+
+    localStreamRef.current = stream;
+
+    if (localVideoRef.current) {
+      localVideoRef.current.srcObject = stream;
+    }
+
+    // add tracks
+    stream.getTracks().forEach((track) => {
+      pcRef.current.addTrack(track, stream);
+    });
+
+    const offer = await pcRef.current.createOffer();
+    await pcRef.current.setLocalDescription(offer);
+
+    socketRef.current.emit("offer", {
+      to: peerId,
+      from: userIdRef.current,
+      offer,
+    });
   };
+
+  useEffect(() => {
+    return () => {
+      socketRef.current?.disconnect();
+      pcRef.current?.close();
+    };
+  }, []);
 
   return (
-    <div style={{ padding: "20px" }}>
-      <h1>Screen Sharing App</h1>
+    <div style={{ padding: 20 }}>
+      <h2>Screen Sharing App</h2>
 
-      <div style={{ marginBottom: "20px" }}>
-        <input
-          value={roomId}
-          onChange={(e) => setRoomId(e.target.value)}
-          placeholder="Room ID"
-        />
-        <button onClick={joinRoom} disabled={isJoined}>
-          {isJoined ? "Joined Room" : "Join Room"}
-        </button>
-      </div>
+      <button onClick={connect}>
+        {connected ? "Connected" : "Connect"}
+      </button>
 
-      {isJoined && (
-        <button onClick={shareScreen} style={{ marginBottom: "20px", display: "block" }}>
-          Share Screen
-        </button>
-      )}
+      <p>Your ID: <b>{userIdRef.current}</b></p>
 
-      <div style={{ display: "flex", gap: "20px", flexWrap: "wrap" }}>
+      <input
+        placeholder="Enter peer ID"
+        value={peerId}
+        onChange={(e) => setPeerId(e.target.value)}
+      />
+
+      <button onClick={shareScreen} style={{ marginLeft: 10 }}>
+        Share Screen
+      </button>
+
+      <div style={{ display: "flex", gap: 20, marginTop: 20 }}>
         <div>
-          <h3>My Screen</h3>
+          <h4>Local Screen</h4>
           <video
             ref={localVideoRef}
             autoPlay
             muted
             playsInline
-            style={{ width: "400px", height: "300px", border: "2px solid black" }}
+            style={{ width: 300, border: "1px solid black" }}
           />
         </div>
+
         <div>
-          <h3>Received Screen</h3>
+          <h4>Remote Screen</h4>
           <video
             ref={remoteVideoRef}
             autoPlay
-            muted
             playsInline
-            style={{ width: "400px", height: "300px", border: "2px solid black" }}
+            style={{ width: 300, border: "1px solid black" }}
           />
         </div>
       </div>
