@@ -31,34 +31,15 @@ export default function App() {
   const initPeerConnection = (socket) => {
     peerConnection.current = new RTCPeerConnection({
   iceServers: [
+    { urls: "stun:stun.l.google.com:19302" },
     {
-      urls: "stun:stun.relay.metered.ca:80",
+      urls: ["turn:openrelay.metered.ca:80",
+       "turn:openrelay.metered.ca:443",
+        "turn:openrelay.metered.ca:443?transport=tcp",],
+      username: "8bedba40f69af7e05b137d49",
+      credential: "dsZ8EQfob0tp0bxy",
     },
-
-    {
-      urls: "turn:global.relay.metered.ca:80",
-      username: "YOUR_USERNAME",
-      credential: "YOUR_PASSWORD",
-    },
-
-    {
-      urls: "turn:global.relay.metered.ca:80?transport=tcp",
-      username: "YOUR_USERNAME",
-      credential: "YOUR_PASSWORD",
-    },
-
-    {
-      urls: "turn:global.relay.metered.ca:443",
-      username: "YOUR_USERNAME",
-      credential: "YOUR_PASSWORD",
-    },
-
-    {
-      urls: "turns:global.relay.metered.ca:443?transport=tcp",
-      username: "YOUR_USERNAME",
-      credential: "YOUR_PASSWORD",
-    }
-  ]
+  ],
 });
 
     // Send local ICE candidates to the remote peer
