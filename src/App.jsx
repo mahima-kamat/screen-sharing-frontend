@@ -3,132 +3,90 @@ import io from "socket.io-client";
 
 export default function App() {
   const [peerId, setPeerId] = useState("");
-  const [connected, setConnected] = useState(false);
 
   const socketRef = useRef(null);
   const pcRef = useRef(null);
-  const localStreamRef = useRef(null);
 
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
 
-  // unique user id per device/tab
-  const userIdRef = useRef(
+  const userId = useRef(
     localStorage.getItem("userId") ||
-      (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()))
+    crypto.randomUUID()
   );
 
-  localStorage.setItem("userId", userIdRef.current);
+  localStorage.setItem("userId", userId.current);
 
-  // =========================
   // CONNECT SOCKET
-  // =========================
   const connect = () => {
-    const socket = io("https://screensharebackend-6fat.onrender.com");
+    socketRef.current = io("http://localhost:4400"); // change to deployed URL
 
-    socketRef.current = socket;
-
-    socket.on("connect", () => {
-      console.log("Connected:", socket.id);
-
-      // register user
-      socket.emit("register", userIdRef.current);
-      setConnected(true);
-
+    socketRef.current.on("connect", () => {
+      socketRef.current.emit("register", userId.current);
       initPeer();
+      console.log("Connected");
     });
 
-    // =========================
     // OFFER RECEIVED
-    // =========================
-    socket.on("offer", async ({ from, offer }) => {
-      console.log("Offer from:", from);
-
+    socketRef.current.on("offer", async ({ from, offer }) => {
       await pcRef.current.setRemoteDescription(offer);
 
       const answer = await pcRef.current.createAnswer();
       await pcRef.current.setLocalDescription(answer);
 
-      socket.emit("answer", {
+      socketRef.current.emit("answer", {
         to: from,
-        from: userIdRef.current,
-        answer,
+        from: userId.current,
+        answer
       });
     });
 
-    // =========================
     // ANSWER RECEIVED
-    // =========================
-    socket.on("answer", async ({ answer }) => {
-      console.log("Answer received");
+    socketRef.current.on("answer", async ({ answer }) => {
       await pcRef.current.setRemoteDescription(answer);
     });
 
-    // =========================
-    // ICE CANDIDATES
-    // =========================
-    socket.on("ice-candidate", async ({ candidate }) => {
-      try {
-        if (candidate) {
-          await pcRef.current.addIceCandidate(candidate);
-        }
-      } catch (err) {
-        console.log("ICE error:", err);
+    // ICE
+    socketRef.current.on("ice-candidate", async ({ candidate }) => {
+      if (candidate) {
+        await pcRef.current.addIceCandidate(candidate);
       }
     });
   };
 
-  // =========================
   // PEER CONNECTION
-  // =========================
   const initPeer = () => {
     pcRef.current = new RTCPeerConnection({
       iceServers: [
         { urls: "stun:stun.l.google.com:19302" }
-      ],
+      ]
     });
 
-    // send ICE to remote peer
     pcRef.current.onicecandidate = (event) => {
-      if (event.candidate && socketRef.current) {
+      if (event.candidate) {
         socketRef.current.emit("ice-candidate", {
           to: peerId,
-          from: userIdRef.current,
-          candidate: event.candidate,
+          from: userId.current,
+          candidate: event.candidate
         });
       }
     };
 
-    // receive remote stream
     pcRef.current.ontrack = (event) => {
-      if (remoteVideoRef.current) {
-        remoteVideoRef.current.srcObject = event.streams[0];
-      }
+      remoteVideoRef.current.srcObject = event.streams[0];
     };
   };
 
-  // =========================
   // SHARE SCREEN
-  // =========================
   const shareScreen = async () => {
-    if (!peerId) {
-      alert("Enter peer ID first");
-      return;
-    }
-
     const stream = await navigator.mediaDevices.getDisplayMedia({
       video: true,
-      audio: false,
+      audio: false
     });
 
-    localStreamRef.current = stream;
+    localVideoRef.current.srcObject = stream;
 
-    if (localVideoRef.current) {
-      localVideoRef.current.srcObject = stream;
-    }
-
-    // add tracks
-    stream.getTracks().forEach((track) => {
+    stream.getTracks().forEach(track => {
       pcRef.current.addTrack(track, stream);
     });
 
@@ -137,8 +95,8 @@ export default function App() {
 
     socketRef.current.emit("offer", {
       to: peerId,
-      from: userIdRef.current,
-      offer,
+      from: userId.current,
+      offer
     });
   };
 
@@ -151,45 +109,25 @@ export default function App() {
 
   return (
     <div style={{ padding: 20 }}>
-      <h2>Screen Sharing App</h2>
+      <h2>Screen Share App</h2>
 
-      <button onClick={connect}>
-        {connected ? "Connected" : "Connect"}
-      </button>
+      <button onClick={connect}>Connect</button>
 
-      <p>Your ID: <b>{userIdRef.current}</b></p>
+      <p>Your ID: {userId.current}</p>
 
       <input
-        placeholder="Enter peer ID"
+        placeholder="Enter Peer ID"
         value={peerId}
         onChange={(e) => setPeerId(e.target.value)}
       />
 
-      <button onClick={shareScreen} style={{ marginLeft: 10 }}>
+      <button onClick={shareScreen}>
         Share Screen
       </button>
 
-      <div style={{ display: "flex", gap: 20, marginTop: 20 }}>
-        <div>
-          <h4>Local Screen</h4>
-          <video
-            ref={localVideoRef}
-            autoPlay
-            muted
-            playsInline
-            style={{ width: 300, border: "1px solid black" }}
-          />
-        </div>
-
-        <div>
-          <h4>Remote Screen</h4>
-          <video
-            ref={remoteVideoRef}
-            autoPlay
-            playsInline
-            style={{ width: 300, border: "1px solid black" }}
-          />
-        </div>
+      <div style={{ display: "flex", gap: 20 }}>
+        <video ref={localVideoRef} autoPlay muted width="300" />
+        <video ref={remoteVideoRef} autoPlay width="300" />
       </div>
     </div>
   );
