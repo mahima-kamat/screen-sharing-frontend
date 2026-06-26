@@ -19,7 +19,7 @@ export default function App() {
 
   // CONNECT SOCKET
   const connect = () => {
-    socketRef.current = io("http://localhost:4400"); // change to deployed URL
+    socketRef.current = io("https://screensharebackend-1.onrender.com"); // change to deployed URL
 
     socketRef.current.on("connect", () => {
       socketRef.current.emit("register", userId.current);
