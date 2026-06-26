@@ -3,149 +3,200 @@ import io from "socket.io-client";
 
 export default function App() {
   const [roomId, setRoomId] = useState("");
-
-  const socketRef = useRef(null);
-  const pcRef = useRef(null);
+  const [isJoined, setIsJoined] = useState(false);
 
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
 
-  // CONNECT SOCKET
-  const connect = () => {
-    socketRef.current = io("https://screensharebackend-1.onrender.com", {
-      transports: ["websocket", "polling"]
-    });
+  const socketRef = useRef(null);
+  const peerConnection = useRef(null);
+  const localStream = useRef(null);
+  const isNegotiating = useRef(false);
+  const iceCandidatesQueue = useRef([]);
 
-    socketRef.current.on("connect", () => {
-      console.log("Connected:", socketRef.current.id);
-    });
+  // Ref keeps the latest roomId accessible to useEffect event listeners
+  const roomIdRef = useRef(roomId);
+  useEffect(() => {
+    roomIdRef.current = roomId;
+  }, [roomId]);
 
-    // OFFER RECEIVED
-    socketRef.current.on("offer", async ({ from, offer }) => {
-      await initPeer();
+  // Clean up on component unmount
+  useEffect(() => {
+    return () => {
+      if (peerConnection.current) peerConnection.current.close();
+      if (socketRef.current) socketRef.current.disconnect();
+    };
+  }, []);
 
-      await pcRef.current.setRemoteDescription(offer);
+  const initPeerConnection = (socket) => {
+    peerConnection.current = new RTCPeerConnection({
+  iceServers: [
+    { urls: "stun:stun.l.google.com:19302" },
+    {
+      urls: ["turn:openrelay.metered.ca:80",
+       "turn:openrelay.metered.ca:443",
+        "turn:openrelay.metered.ca:443?transport=tcp",],
+      username: "openrelayproject",
+      credential: "openrelayproject",
+    },
+  ],
+});
 
-      const answer = await pcRef.current.createAnswer();
-      await pcRef.current.setLocalDescription(answer);
-
-      socketRef.current.emit("answer", {
-        roomId,
-        answer
-      });
-    });
-
-    // ANSWER RECEIVED
-    socketRef.current.on("answer", async ({ answer }) => {
-      await pcRef.current.setRemoteDescription(answer);
-    });
-
-    // ICE CANDIDATE
-    socketRef.current.on("ice-candidate", async ({ candidate }) => {
-      try {
-        if (candidate) {
-          await pcRef.current.addIceCandidate(candidate);
-        }
-      } catch (err) {
-        console.log("ICE error:", err);
-      }
-    });
-  };
-
-  // JOIN ROOM
-  const joinRoom = () => {
-    if (!roomId) return alert("Enter Room ID");
-
-    socketRef.current.emit("join-room", roomId, (res) => {
-      console.log("Joined room:", res);
-      initPeer();
-    });
-  };
-
-  // INIT PEER CONNECTION
-  const initPeer = async () => {
-    if (pcRef.current) return;
-
-    pcRef.current = new RTCPeerConnection({
-      iceServers: [
-        { urls: "stun:stun.l.google.com:19302" }
-      ]
-    });
-
-    // SEND ICE
-    pcRef.current.onicecandidate = (event) => {
-      if (event.candidate) {
-        socketRef.current.emit("ice-candidate", {
-          roomId,
-          candidate: event.candidate
+    // Send local ICE candidates to the remote peer
+    peerConnection.current.onicecandidate = (event) => {
+      if (event.candidate && socket) {
+        socket.emit("ice-candidate", {
+          roomId: roomIdRef.current,
+          candidate: event.candidate,
         });
       }
     };
 
-    // RECEIVE STREAM
-    pcRef.current.ontrack = (event) => {
-      remoteVideoRef.current.srcObject = event.streams[0];
+    // Listen for incoming remote stream tracks
+    peerConnection.current.ontrack = (event) => {
+      const [stream] = event.streams;
+      if (stream && remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = stream;
+      }
     };
   };
 
-  // SHARE SCREEN
+  const joinRoom = () => {
+    if (!roomId) return alert("Please enter a Room ID");
+
+    const socket = io("https://screensharebackend-6fat.onrender.com");
+    socketRef.current = socket;
+
+    socket.on("connect", () => {
+      socket.emit("join-room", roomId);
+      setIsJoined(true);
+      initPeerConnection(socket);
+    });
+
+    socket.on("connect_error", () => {
+      alert("Failed to connect to signaling server");
+    });
+
+    // Offer Handler (Receiver side)
+    socket.on("offer", async (offer) => {
+      if (isNegotiating.current) return;
+      isNegotiating.current = true;
+      try {
+        if (peerConnection.current.signalingState !== "stable") return;
+        await peerConnection.current.setRemoteDescription(new RTCSessionDescription(offer));
+        const answer = await peerConnection.current.createAnswer();
+        await peerConnection.current.setLocalDescription(answer);
+
+        socket.emit("answer", { roomId: roomIdRef.current, answer });
+
+        // Add early ICE candidates
+        for (const candidate of iceCandidatesQueue.current) {
+          await peerConnection.current.addIceCandidate(new RTCIceCandidate(candidate));
+        }
+        iceCandidatesQueue.current = [];
+      } catch (err) {
+        console.error("Offer error:", err);
+      } finally {
+        isNegotiating.current = false;
+      }
+    });
+
+    // Answer Handler (Sender side)
+    socket.on("answer", async (answer) => {
+      try {
+        if (peerConnection.current.signalingState === "have-local-offer") {
+          await peerConnection.current.setRemoteDescription(new RTCSessionDescription(answer));
+
+          // Add early ICE candidates
+          for (const candidate of iceCandidatesQueue.current) {
+            await peerConnection.current.addIceCandidate(new RTCIceCandidate(candidate));
+          }
+          iceCandidatesQueue.current = [];
+        }
+      } catch (err) {
+        console.error("Answer error:", err);
+      }
+    });
+
+    // ICE Candidate Handler
+    socket.on("ice-candidate", async (candidate) => {
+      try {
+        if (peerConnection.current && peerConnection.current.remoteDescription) {
+          await peerConnection.current.addIceCandidate(new RTCIceCandidate(candidate));
+        } else {
+          iceCandidatesQueue.current.push(candidate);
+        }
+      } catch (err) {
+        console.error("ICE error:", err);
+      }
+    });
+  };
+
   const shareScreen = async () => {
-    if (!roomId) return alert("Enter Room ID");
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: true,
+        audio: false,
+      });
+      localStream.current = stream;
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = stream;
+      }
 
-    const stream = await navigator.mediaDevices.getDisplayMedia({
-      video: true,
-      audio: false
-    });
+      stream.getTracks().forEach((track) => {
+        peerConnection.current.addTrack(track, stream);
+      });
 
-    localVideoRef.current.srcObject = stream;
+      const offer = await peerConnection.current.createOffer();
+      await peerConnection.current.setLocalDescription(offer);
 
-    stream.getTracks().forEach((track) => {
-      pcRef.current.addTrack(track, stream);
-    });
-
-    const offer = await pcRef.current.createOffer();
-    await pcRef.current.setLocalDescription(offer);
-
-    socketRef.current.emit("offer", {
-      roomId,
-      offer
-    });
+      socketRef.current.emit("offer", { roomId, offer });
+    } catch (err) {
+      console.error("Screen share error:", err);
+    }
   };
-
-  useEffect(() => {
-    return () => {
-      socketRef.current?.disconnect();
-      pcRef.current?.close();
-    };
-  }, []);
 
   return (
-    <div style={{ padding: 20 }}>
-      <h2>Room Based Screen Share</h2>
+    <div style={{ padding: "20px" }}>
+      <h1>Screen Sharing App</h1>
 
-      <button onClick={connect}>Connect</button>
+      <div style={{ marginBottom: "20px" }}>
+        <input
+          value={roomId}
+          onChange={(e) => setRoomId(e.target.value)}
+          placeholder="Room ID"
+        />
+        <button onClick={joinRoom} disabled={isJoined}>
+          {isJoined ? "Joined Room" : "Join Room"}
+        </button>
+      </div>
 
-      <br /><br />
+      {isJoined && (
+        <button onClick={shareScreen} style={{ marginBottom: "20px", display: "block" }}>
+          Share Screen
+        </button>
+      )}
 
-      <input
-        placeholder="Enter Room ID"
-        value={roomId}
-        onChange={(e) => setRoomId(e.target.value)}
-      />
-
-      <button onClick={joinRoom}>Join Room</button>
-
-      <button onClick={shareScreen}>Share Screen</button>
-
-      <div style={{ display: "flex", gap: 20, marginTop: 20 }}>
+      <div style={{ display: "flex", gap: "20px", flexWrap: "wrap" }}>
         <div>
-          <h4>Local Screen</h4>
-          <video ref={localVideoRef} autoPlay muted width="300" />
+          <h3>My Screen</h3>
+          <video
+            ref={localVideoRef}
+            autoPlay
+            muted
+            playsInline
+            style={{ width: "400px", height: "300px", border: "2px solid black" }}
+          />
         </div>
-
         <div>
-          <h4>Remote Screen</h4>
-          <video ref={remoteVideoRef} autoPlay width="300" />
+          <h3>Received Screen</h3>
+          <video
+            ref={remoteVideoRef}
+            autoPlay
+            muted
+            playsInline
+            style={{ width: "400px", height: "300px", border: "2px solid black" }}
+          />
         </div>
       </div>
     </div>
